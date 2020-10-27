@@ -28,8 +28,8 @@ def cifar_data():
     transform = transforms.Compose(
         [transforms.ToTensor()])
 
-    cifar_trainset = datasets.CIFAR10(root='/home/anirudh/blocks/sparse_relational/data/', train=True, download=True, transform = transform)
-    cifar_testset = datasets.CIFAR10(root='/home/anirudh/blocks/sparse_relational/data/', train=False, download=True, transform=transform)
+    cifar_trainset = datasets.CIFAR10(root='./data/', train=True, download=True, transform = transform)
+    cifar_testset = datasets.CIFAR10(root='./data/', train=False, download=True, transform=transform)
     noise_set = torch.tensor(np.random.randn(10000, 3, 32, 32), dtype=torch.float)
 
     num_val = len(cifar_trainset) // 5

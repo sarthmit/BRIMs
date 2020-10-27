@@ -26,8 +26,8 @@ Returns:
 '''
 
 def mnist_data():
-    mnist_trainset = datasets.MNIST(root='/home/anirudh/blocks/sparse_relational/data/', train=True, download=True, transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor()]))
-    mnist_testset = datasets.MNIST(root='/home/anirudh/blocks/sparse_relational/data/', train=False, download=True, transform=torchvision.transforms.Compose([torchvision.transforms.ToTensor()]))
+    mnist_trainset = datasets.MNIST(root='./data/', train=True, download=True, transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor()]))
+    mnist_testset = datasets.MNIST(root='./data/', train=False, download=True, transform=torchvision.transforms.Compose([torchvision.transforms.ToTensor()]))
 
     num_val = len(mnist_trainset) // 5
     np.random.seed(0)
