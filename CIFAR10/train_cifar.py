@@ -49,33 +49,22 @@ parser.add_argument('--epochs', type=int, default=100,
                     help='upper epoch limit')
 parser.add_argument('--batch_size', type=int, default=64, metavar='N',
                     help='batch size')
-parser.add_argument('--bptt', type=int, default=100,
-                    help='sequence length')
 parser.add_argument('--dropout', type=float, default=0.5,
                     help='dropout applied to layers (0 = no dropout)')
 parser.add_argument('--cuda', action='store_true',
                     help='use CUDA')
 parser.add_argument('--noise', action='store_true', default=False,
                     help='use CUDA')
-parser.add_argument('--tied', default=False, action='store_true',
-                    help='tie the word embedding and softmax weights')
 parser.add_argument('--cudnn', action='store_true',
                     help='use cudnn optimized version. i.e. use RNN instead of RNNCell with for loop')
 parser.add_argument('--log-interval', type=int, default=100, metavar='N',
                     help='report interval')
-parser.add_argument('--save', type=str, default='model.pt',
-                    help='path to save the final model')
-parser.add_argument('--onnx-export', type=str, default='',
-                    help='path to export the final model in onnx format')
-parser.add_argument('--resume', type=int, default=None,
-                    help='if specified with the 1-indexed global epoch, loads the checkpoint and resumes training')
 parser.add_argument('--algo', type=str, choices=('blocks', 'lstm','mixed'))
 parser.add_argument('--num_blocks', nargs='+', type=int, default=[6])
 parser.add_argument('--nhid', nargs='+', type=int, default=[300])
 parser.add_argument('--topk', nargs='+', type=int, default=[4])
 parser.add_argument('--block_dilation', nargs='+', type=int, default=-1)
 parser.add_argument('--layer_dilation', nargs='+', type=int, default=-1)
-parser.add_argument('--read_input', type=int, default=2)
 
 parser.add_argument('--use_inactive', action='store_true',
                     help='Use inactive blocks for higher level representations too')
@@ -126,30 +115,10 @@ device = torch.device("cuda" if args.cuda else "cpu")
 
 train_loader, val_loader, test_loader, noise_loader = cifar_data()
 
-# Starting from sequential data, batchify arranges the dataset into columns.
-# For instance, with the alphabet as the sequence and batch size 4, we'd get
-# ┌ a g m s ┐
-# │ b h n t │
-# │ c i o u │
-# │ d j p v │
-# │ e k q w │
-# └ f l r x ┘.
-# These columns are treated as independent by the model, which means that the
-# dependence of e. g. 'g' on 'f' can not be learned, but allows more efficient
-# batch processing.
-
-def batchify(data, bsz):
-    # Work out how cleanly we can divide the dataset into bsz parts.
-    nbatch = data.size(0) // bsz
-    # Trim off any extra elements that wouldn't cleanly fit (remainders).
-    data = data.narrow(0, 0, nbatch * bsz)
-    # Evenly divide the data across the bsz batches.
-    data = data.view(bsz, -1).t().contiguous()
-    return data.to(device)
-
 # create folder for current experiments
 # name: args.name + current time
 # includes: entire scripts for faithful reproduction, train & test logs
+
 folder_name = str(datetime.datetime.now())[:-7]
 if args.name is not None:
     folder_name = str(args.name)
@@ -188,23 +157,23 @@ else:
 if args.algo == "blocks":
     rnn_mod = rnn_models.RNNModel
     model = rnn_mod(args.model, ntokens, args.emsize, args.nhid,
-                            args.nlayers, n_out, args.dropout, args.tied,
+                            args.nlayers, n_out, args.dropout, False,
                             num_blocks = args.num_blocks, topk = args.topk,
                             use_cudnn_version=args.cudnn,
                             use_adaptive_softmax=args.adaptivesoftmax,
                             cutoffs=args.cutoffs, use_inactive = args.use_inactive,
                             blocked_grad=args.blocked_grad, block_dilation=args.block_dilation,
-                            layer_dilation=args.layer_dilation, num_modules_read_input=args.read_input).to(device)
+                            layer_dilation=args.layer_dilation, num_modules_read_input=2).to(device)
 elif args.algo == "lstm":
     rnn_mod = baseline_lstm_model.RNNModel
     model = rnn_mod(args.model, ntokens, args.emsize, args.nhid,
-                            args.nlayers, n_out, args.dropout, args.tied,
+                            args.nlayers, n_out, args.dropout, False,
                             use_cudnn_version=args.cudnn,
                             use_adaptive_softmax=args.adaptivesoftmax, cutoffs=args.cutoffs).to(device)
 elif args.algo == 'mixed':
     rnn_mod = mixed.RNNModel
     model = rnn_mod(args.model, ntokens, args.emsize, args.nhid,
-                            args.nlayers, args.dropout, args.tied,
+                            args.nlayers, args.dropout, False,
                             num_blocks = args.num_blocks, topk = args.topk,
                             use_cudnn_version=args.cudnn, use_adaptive_softmax=args.adaptivesoftmax,
                             cutoffs=args.cutoffs, use_inactive=args.use_inactive ,
@@ -278,32 +247,12 @@ def repackage_hidden(h):
             hidden.append(tuple((h[i][0].detach(), h[i][1].detach())))
     return hidden
 
-# get_batch subdivides the source data into chunks of length args.bptt.
-# If source is equal to the example output of the batchify function, with
-# a bptt-limit of 2, we'd get the following two Variables for i = 0:
-# ┌ a g m s ┐ ┌ b h n t ┐
-# └ b h n t ┘ └ c i o u ┘
-# Note that despite the name of the function, the subdivison of data is not
-# done along the batch dimension (i.e. dimension 1), since that was handled
-# by the batchify function. The chunks are along dimension 0, corresponding
-# to the seq_len dimension in the LSTM.
-
-def get_batch(source, i):
-    seq_len = min(args.bptt, len(source) - 1 - i)
-    data = source[i:i + seq_len]
-    target = source[i + 1:i + 1 + seq_len].view(-1)
-    return data, target
-
 def mnist_prep(x, test_upsample=inp_size):
-    # plt.imshow(x[0].transpose(2,0).transpose(0,1))
-    # plt.show()
     d = x
     d = F.interpolate(d, size=(test_upsample,test_upsample), mode='nearest')
     d = d.transpose(3,1).transpose(1,2)
     d = d.reshape((d.shape[0],test_upsample*test_upsample,3)) * 255.
     d = d.round().to(dtype=torch.int64)
-    # plt.imshow(d[0].reshape(test_upsample, test_upsample, 3))
-    # plt.show()
     d = d.permute(1,0,2)
     return d
 

@@ -6,7 +6,6 @@ import math
 import os
 import torch
 import torch.nn as nn
-import torch.onnx
 import datetime
 import shutil
 import pickle
@@ -33,8 +32,6 @@ np.random.seed(0)
 
 # same hyperparameter scheme as word-language-model
 parser = argparse.ArgumentParser(description='PyTorch Wikitext-2 RNN/LSTM Language Model')
-parser.add_argument('--data', type=str, default='./data/wikitext-2',
-                    help='location of the data corpus')
 parser.add_argument('--model', type=str, default='LSTM',
                     help='type of recurrent net (RNN_TANH, RNN_RELU, LSTM, GRU)')
 parser.add_argument('--emsize', type=int, default=300,
@@ -49,12 +46,8 @@ parser.add_argument('--epochs', type=int, default=100,
                     help='upper epoch limit')
 parser.add_argument('--batch_size', type=int, default=64, metavar='N',
                     help='batch size')
-parser.add_argument('--bptt', type=int, default=100,
-                    help='sequence length')
 parser.add_argument('--dropout', type=float, default=0.5,
                     help='dropout applied to layers (0 = no dropout)')
-parser.add_argument('--tied', default=False, action='store_true',
-                    help='tie the word embedding and softmax weights')
 parser.add_argument('--seed', type=int, default=1111,
                     help='random seed')
 parser.add_argument('--cuda', action='store_true',
@@ -63,19 +56,12 @@ parser.add_argument('--cudnn', action='store_true',
                     help='use cudnn optimized version. i.e. use RNN instead of RNNCell with for loop')
 parser.add_argument('--log-interval', type=int, default=100, metavar='N',
                     help='report interval')
-parser.add_argument('--save', type=str, default='model.pt',
-                    help='path to save the final model')
-parser.add_argument('--onnx-export', type=str, default='',
-                    help='path to export the final model in onnx format')
-parser.add_argument('--resume', type=int, default=None,
-                    help='if specified with the 1-indexed global epoch, loads the checkpoint and resumes training')
 parser.add_argument('--algo', type=str, choices=('blocks', 'lstm','mixed'))
 parser.add_argument('--num_blocks', nargs='+', type=int, default=[6])
 parser.add_argument('--nhid', nargs='+', type=int, default=[300])
 parser.add_argument('--topk', nargs='+', type=int, default=[4])
 parser.add_argument('--block_dilation', nargs='+', type=int, default=-1)
 parser.add_argument('--layer_dilation', nargs='+', type=int, default=-1)
-parser.add_argument('--read_input', type=int, default=2)
 
 parser.add_argument('--use_inactive', action='store_true',
                     help='Use inactive blocks for higher level representations too')
@@ -117,8 +103,6 @@ norm = plt.Normalize(0, 1)
 matplotlib.rc('xtick', labelsize=7.5)
 matplotlib.rc('ytick', labelsize=7.5)
 
-print("Are Encoder and Decoder Weights Tied?", args.tied)
-
 # Set the random seed manually for reproducibility.
 torch.manual_seed(args.seed)
 
@@ -131,27 +115,6 @@ device = torch.device("cuda" if args.cuda else "cpu")
 # Get Data Loaders
 
 train_loader, val_loader, test_loader = mnist_data()
-
-# Starting from sequential data, batchify arranges the dataset into columns.
-# For instance, with the alphabet as the sequence and batch size 4, we'd get
-# ┌ a g m s ┐
-# │ b h n t │
-# │ c i o u │
-# │ d j p v │
-# │ e k q w │
-# └ f l r x ┘.
-# These columns are treated as independent by the model, which means that the
-# dependence of e. g. 'g' on 'f' can not be learned, but allows more efficient
-# batch processing.
-
-def batchify(data, bsz):
-    # Work out how cleanly we can divide the dataset into bsz parts.
-    nbatch = data.size(0) // bsz
-    # Trim off any extra elements that wouldn't cleanly fit (remainders).
-    data = data.narrow(0, 0, nbatch * bsz)
-    # Evenly divide the data across the bsz batches.
-    data = data.view(bsz, -1).t().contiguous()
-    return data.to(device)
 
 eval_batch_size = 32
 
@@ -197,22 +160,22 @@ else:
 if args.algo == "blocks":
     rnn_mod = rnn_models.RNNModel
     model = rnn_mod(args.model, ntokens, args.emsize, args.nhid,
-                            args.nlayers, n_out, args.dropout, args.tied,
+                            args.nlayers, n_out, args.dropout, False,
                             num_blocks = args.num_blocks, topk = args.topk,
                             use_cudnn_version=args.cudnn, use_adaptive_softmax=args.adaptivesoftmax,
                             cutoffs=args.cutoffs, use_inactive = args.use_inactive,
                             blocked_grad=args.blocked_grad, block_dilation=args.block_dilation,
-                            layer_dilation=args.layer_dilation, num_modules_read_input=args.read_input).to(device)
+                            layer_dilation=args.layer_dilation, num_modules_read_input=2).to(device)
 elif args.algo == "lstm":
     rnn_mod = baseline_lstm_model.RNNModel
     model = rnn_mod(args.model, ntokens, args.emsize, args.nhid,
-                            args.nlayers, n_out, args.dropout, args.tied,
+                            args.nlayers, n_out, args.dropout, False,
                             use_cudnn_version=args.cudnn, use_adaptive_softmax=args.adaptivesoftmax,
                             cutoffs=args.cutoffs).to(device)
 elif args.algo == 'mixed':
     rnn_mod = mixed.RNNModel
     model = rnn_mod(args.model, ntokens, args.emsize, args.nhid,
-                            args.nlayers, args.dropout, args.tied,
+                            args.nlayers, args.dropout, False,
                             num_blocks = args.num_blocks, topk = args.topk,
                             use_cudnn_version=args.cudnn, use_adaptive_softmax=args.adaptivesoftmax,
                             cutoffs=args.cutoffs, use_inactive=args.use_inactive ,
@@ -237,29 +200,7 @@ if not args.cudnn:
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
 
-###############################################################################
-# Load the model checkpoint if specified and restore the global & best epoch
-###############################################################################
-
-if args.resume is not None:
-    print("--resume detected. loading checkpoint...")
-global_epoch = args.resume if args.resume is not None else 0
-best_epoch = args.resume if args.resume is not None else 0
-if args.resume is not None:
-    loadpath = os.path.join(os.getcwd(), "model_{}.pt".format(args.resume))
-    if not os.path.isfile(loadpath):
-        raise FileNotFoundError(
-            "model_{}.pt not found. place the model checkpoint file to the current working directory.".format(
-                args.resume))
-    checkpoint = torch.load(loadpath)
-    model.load_state_dict(checkpoint["state_dict"])
-    optimizer.load_state_dict(checkpoint["optimizer"])
-    scheduler.load_state_dict(checkpoint["scheduler"])
-    global_epoch = checkpoint["global_epoch"]
-    best_epoch = checkpoint["best_epoch"]
-
 print("Model Built with Total Number of Trainable Parameters: " + str(total_params))
-
 
 ###############################################################################
 # Training code
@@ -284,22 +225,6 @@ def repackage_hidden(h):
         else:
             hidden.append(tuple((h[i][0].detach(), h[i][1].detach())))
     return hidden
-
-# get_batch subdivides the source data into chunks of length args.bptt.
-# If source is equal to the example output of the batchify function, with
-# a bptt-limit of 2, we'd get the following two Variables for i = 0:
-# ┌ a g m s ┐ ┌ b h n t ┐
-# └ b h n t ┘ └ c i o u ┘
-# Note that despite the name of the function, the subdivison of data is not
-# done along the batch dimension (i.e. dimension 1), since that was handled
-# by the batchify function. The chunks are along dimension 0, corresponding
-# to the seq_len dimension in the LSTM.
-
-def get_batch(source, i):
-    seq_len = min(args.bptt, len(source) - 1 - i)
-    data = source[i:i + seq_len]
-    target = source[i + 1:i + 1 + seq_len].view(-1)
-    return data, target
 
 def mnist_prep(x, do_upsample=True, test_upsample=-1):
     d = x
