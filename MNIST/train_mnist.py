@@ -87,9 +87,7 @@ parser.add_argument('--name', type=str, default=None,
 args = parser.parse_args()
 
 best_test = {14:0.0, 16:0.0, 19:0.0, 24:0.0}
-best_test_epoch = {14:0.0, 16:0.0, 19:0.0, 24:0.0}
-best_val = 0
-best_val_epoch = 0
+best_val = {14:0.0, 16:0.0, 19:0.0, 24:0.0}
 
 inp_size = 14
 val_size = inp_size
@@ -115,7 +113,6 @@ device = torch.device("cuda" if args.cuda else "cpu")
 # Get Data Loaders
 
 train_loader, val_loader, test_loader = mnist_data()
-
 eval_batch_size = 32
 
 # create folder for current experiments
@@ -371,7 +368,7 @@ def evaluate_(test_lens, split):
     return test_acc
 
 def train(epoch):
-    global best_val, best_val_epoch
+    global best_val
     total_loss = 0.
     forward_elapsed_time = 0.
     start_time = time.time()
@@ -380,9 +377,6 @@ def train(epoch):
     j = 0
 
     calc_mask = True
-
-    test_epoch = {14:0.0, 16:0.0, 19:0.0, 24:0.0}
-    val_epoch = 0.0
 
     for d,t in train_loader:
         hidden = model.init_hidden(args.batch_size)
@@ -438,7 +432,7 @@ def train(epoch):
             cur_loss = total_loss / args.log_interval
             elapsed = time.time() - start_time
             printlog = '| epoch {:3d} | {:5d}/{:5d} batches | lr {:02.5f} | ms/batch {:5.2f} | forward ms/batch {:5.2f} | average acc {:5.4f} | ppl {:8.2f}'.format(
-                epoch, i, len(train_loader.dataset) // args.batch_size, optimizer.param_groups[0]['lr'],
+                epoch, i, len(train_loader), optimizer.param_groups[0]['lr'],
                               elapsed * 1000 / args.log_interval, forward_elapsed_time * 1000 / args.log_interval,
                 cur_loss, math.exp(cur_loss))
             # print and save the log
@@ -451,56 +445,33 @@ def train(epoch):
             forward_start_time = time.time()
             forward_elapsed_time = 0.
 
-        if i % args.log_interval == 0 and i > 0 and epoch%10==0:
+        if i % args.log_interval == 0 and i > 0:
             j += 1
             test_lens = [14,16,19,24]
 
             test_acc = evaluate_(test_lens, split="Test")
-            val_acc = evaluate_([val_size], split="Val")[val_size]
+            val_acc = evaluate_(test_lens, split="Val")
 
             printlog = ''
 
-            if val_acc > best_val:
-                for key in test_acc:
-                        best_val = val_acc
-                        best_test[key] = test_acc[key]
-                state = {
-                    'epoch': epoch,
-                    'state_dict': model.state_dict(),
-                    'best_val': best_val
-                    }
-                torch.save(state, folder_name+'/best_model.pt')
-
-
+            for key in test_acc:
+                if val_acc[key] > best_val[key]:
+                    best_val[key] = val_acc[key]
+                    best_test[key] = test_acc[key]
+                    state = {
+                        'epoch': epoch,
+                        'state_dict': model.state_dict(),
+                        'best_val': best_val
+                        }
+                    torch.save(state, folder_name+f'/best_model_{key}.pt')
 
             for key in test_acc:
-                test_epoch[key] += test_acc[key]
-                printlog = printlog + '\n' + '|Seq_len: {} | Test Current: {} | Test Optim: {} | Val Current: {} | Val Best: {} |'.format(str(key), str(test_acc[key]), str(best_test[key]), str(val_acc), str(best_val))
-
-            val_epoch += val_acc
+                printlog = printlog + '\n' + '|Seq_len: {} | Test Current: {} | Test Optim: {} | Val Current: {} | Val Best: {} |'.format(str(key), str(test_acc[key]), str(best_test[key]), str(val_acc[key]), str(best_val[key]))
 
             logger_output.write(printlog+'\n\n')
             logger_output.flush()
 
             print(printlog+'\n\n')
-
-    printlog = ''
-
-    try:
-        avg_test = test_epoch / j
-        avg_val = val_epoch / j
-
-        if avg_val < best_val_epoch:
-            best_val_epoch = avg_val
-            best_test_epoch = avg_test
-
-        printlog = printlog + '\n' + '| Test: {} | Optimum: {} | Val: {} | Best Val: {} |'.format(str(avg_test), str(best_test_epoch), str(avg_val), str(best_val_epoch))
-
-        logger_epoch_output.write(printlog+'\n\n')
-        logger_epoch_output.flush()
-        print(printlog+'\n\n')
-    except:
-        pass
 
     state = {
     'epoch': epoch,

@@ -100,7 +100,6 @@ class BlocksCore(nn.Module):
 
         #use attention here.
 
-
         inp_use = inp_use.reshape((inp_use.shape[0], self.num_blocks_in, self.ninp))
 
         #inp_use = inp_use.repeat(1,self.num_modules_read_input-1,1)

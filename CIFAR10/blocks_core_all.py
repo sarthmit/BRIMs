@@ -48,7 +48,7 @@ class BlocksCore(nn.Module):
         print("block_size_in: ", self.block_size_in)
         print("block_size_out: ", self.block_size_out)
         print("topkval: ", topkval)
-        print("Higher spearate att?", self.higher_separate_att)
+        print("Higher separate att?", self.higher_separate_att)
 
         if self.use_higher:
             self.ninp = nhid + ninp
@@ -57,9 +57,9 @@ class BlocksCore(nn.Module):
 
         self.mha = MultiHeadAttention(n_head=4, d_model_read=self.block_size_out, d_model_write=self.block_size_out, d_model_out=self.block_size_out, d_k=32, d_v=32, num_blocks_read=self.num_blocks_out, num_blocks_write=self.num_blocks_out, topk=self.num_blocks_out, grad_sparse=False)
 
-        self.inp_heads = 2
+        self.inp_heads = 1
         self.att_out = self.block_size_out * 4
-        joined_heads_write = True
+        joined_heads_write = False
 
         print("Input Attention Heads: ", self.inp_heads)
         print("Joined heads write: ", joined_heads_write)
